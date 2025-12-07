@@ -3,55 +3,116 @@
 import { useState, useEffect } from "react";
 import { ColumnConfigurator } from "../components/ColumnConfigurator";
 import { TimelineReplay } from "../components/TimelineReplay";
-import type { RawRow, TimelineEvent } from "../types/events";
+import { FlowMap } from "../components/FlowMap";
+import type { AdlEvent, AdlEventsData, RawRow } from "../types/events";
 import Papa from "papaparse";
 
+const CANONICAL_JSON_URL = "https://raw.githubusercontent.com/ConejoCapital/HyperMultiAssetedADL/main/data/canonical/cash-only%20balances%20ADL%20event%20orderbook%202025-10-10/adl_events.json";
 const CANONICAL_CSV_URL = "https://raw.githubusercontent.com/ConejoCapital/HyperMultiAssetedADL/main/data/canonical/cash-only%20balances%20ADL%20event%20orderbook%202025-10-10/adl_detailed_analysis_REALTIME.csv";
 
+type ViewMode = "timeline" | "flow";
+
 export default function HomePage() {
-  const [rows, setRows] = useState<RawRow[] | null>(null);
-  const [headers, setHeaders] = useState<string[]>([]);
-  const [events, setEvents] = useState<TimelineEvent[]>([]);
+  const [adlEvents, setAdlEvents] = useState<AdlEvent[]>([]);
+  const [metadata, setMetadata] = useState<AdlEventsData["metadata"] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>("timeline");
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [timeRange, setTimeRange] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
 
   useEffect(() => {
-    // Automatically load the canonical CSV on mount
+    // Try loading JSON first, fallback to CSV
     setLoading(true);
     setError(null);
 
-    Papa.parse<RawRow>(CANONICAL_CSV_URL, {
-      download: true,
-      header: true,
-      dynamicTyping: true,
-      skipEmptyLines: true,
-      complete: (result) => {
-        try {
-          const parsedRows = (result.data || []) as RawRow[];
-          if (!parsedRows.length) {
-            setError("No data found in CSV");
-            setLoading(false);
-            return;
-          }
-          const parsedHeaders = Object.keys(parsedRows[0] || {});
-          setRows(parsedRows);
-          setHeaders(parsedHeaders);
-          setLoading(false);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Failed to parse CSV");
-          setLoading(false);
+    fetch(CANONICAL_JSON_URL)
+      .then((res) => {
+        if (res.ok) {
+          return res.json();
         }
-      },
-      error: (err) => {
-        setError(err.message || "Failed to load CSV");
+        throw new Error("JSON not found, falling back to CSV");
+      })
+      .then((data: AdlEventsData) => {
+        setAdlEvents(data.events);
+        setMetadata(data.metadata);
+        setTimeRange(data.metadata.timeRange);
         setLoading(false);
-      },
-    });
+      })
+      .catch(() => {
+        // Fallback to CSV parsing
+        console.log("JSON not available, parsing CSV...");
+        Papa.parse<RawRow>(CANONICAL_CSV_URL, {
+          download: true,
+          header: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete: (result) => {
+            try {
+              const parsedRows = (result.data || []) as RawRow[];
+              if (!parsedRows.length) {
+                setError("No data found in CSV");
+                setLoading(false);
+                return;
+              }
+
+              // Convert CSV rows to AdlEvent format
+              const events: AdlEvent[] = [];
+              for (const row of parsedRows) {
+                const timestamp = parseTimestamp(row.time);
+                if (!timestamp) continue;
+
+                const notional = getNumericValue(row, ["adl_notional", "notional", "usd"]);
+                if (!notional || notional <= 0) continue;
+
+                events.push({
+                  timestamp,
+                  timestampISO: new Date(timestamp).toISOString(),
+                  asset: getStringValue(row, ["coin", "asset", "ticker"]) || "UNKNOWN",
+                  notionalUsd: notional,
+                  side: determineSide(row),
+                  liquidatedUserId: getStringValue(row, ["liquidated_user"]) || "",
+                  targetUserId: getStringValue(row, ["user"]) || "",
+                  batchId: String(Math.floor(timestamp / 1000)),
+                });
+              }
+
+              events.sort((a, b) => a.timestamp - b.timestamp);
+
+              if (events.length) {
+                setAdlEvents(events);
+                setMetadata({
+                  eventCount: events.length,
+                  timeRange: {
+                    start: events[0].timestamp,
+                    end: events[events.length - 1].timestamp,
+                  },
+                  totalNotionalUsd: events.reduce((sum, e) => sum + e.notionalUsd, 0),
+                  uniqueAssets: new Set(events.map((e) => e.asset)).size,
+                  uniqueAccounts: new Set(events.filter((e) => e.targetUserId).map((e) => e.targetUserId)).size,
+                });
+                setTimeRange({
+                  start: events[0].timestamp,
+                  end: events[events.length - 1].timestamp,
+                });
+              }
+              setLoading(false);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Failed to parse CSV");
+              setLoading(false);
+            }
+          },
+          error: (err) => {
+            setError(err.message || "Failed to load data");
+            setLoading(false);
+          },
+        });
+      });
   }, []);
 
   return (
     <main className="min-h-screen px-4 py-8 sm:px-8 sm:py-10 bg-slate-950 text-slate-50">
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         <header className="space-y-2">
           <h1 className="text-2xl sm:text-3xl font-semibold">
             Hyperliquid ADL Visualizer
@@ -83,42 +144,110 @@ export default function HomePage() {
           </div>
         )}
 
-        {rows && !loading && (
-          <div className="space-y-4">
-            <div className="border border-slate-700/70 rounded-2xl p-4 bg-slate-900/60">
-              <h2 className="text-lg font-semibold mb-2">Data Loaded</h2>
-              <p className="text-sm text-slate-400">
-                Loaded <span className="font-mono text-emerald-400">{rows.length.toLocaleString()}</span> ADL events from canonical dataset.
-              </p>
+        {adlEvents.length > 0 && metadata && (
+          <>
+            {/* View mode selector */}
+            <div className="flex items-center gap-4 border border-slate-700/70 rounded-2xl p-4 bg-slate-900/60">
+              <div className="text-sm text-slate-400">View:</div>
+              <button
+                type="button"
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition ${
+                  viewMode === "timeline"
+                    ? "bg-emerald-500 text-slate-950"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                }`}
+                onClick={() => setViewMode("timeline")}
+              >
+                Timeline Replay
+              </button>
+              <button
+                type="button"
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition ${
+                  viewMode === "flow"
+                    ? "bg-emerald-500 text-slate-950"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                }`}
+                onClick={() => setViewMode("flow")}
+              >
+                Flow Map
+              </button>
+              <div className="ml-auto text-xs text-slate-500">
+                {metadata.eventCount.toLocaleString()} events • ${metadata.totalNotionalUsd.toLocaleString(undefined, {
+                  maximumFractionDigits: 0,
+                })} total notional
+              </div>
             </div>
 
-            <ColumnConfigurator
-              rows={rows}
-              headers={headers}
-              onEventsReady={(evs) => setEvents(evs)}
-            />
+            {/* Timeline view */}
+            {viewMode === "timeline" && (
+              <TimelineReplay
+                events={adlEvents}
+                onTimeUpdate={setCurrentTimeMs}
+                timeRange={timeRange}
+              />
+            )}
 
-            {events.length > 0 && <TimelineReplay events={events} />}
-          </div>
+            {/* Flow map view */}
+            {viewMode === "flow" && (
+              <FlowMap
+                events={adlEvents}
+                currentTimeMs={currentTimeMs}
+                timeRange={timeRange}
+              />
+            )}
+          </>
         )}
-
-        {/* Flowmap placeholder – next step */}
-        <section className="mt-8 border border-dashed border-slate-700/70 rounded-2xl p-4 text-sm text-slate-400">
-          <h2 className="text-base font-semibold text-slate-200 mb-1">
-            Flow Map (Next Step)
-          </h2>
-          <p>
-            Once we agree the timeline replay feels right, we'll reuse the same parsed events
-            (plus source/target columns from the CSV) to build a{" "}
-            <strong>flow map</strong>: nodes as accounts or assets, edges as ADL notional
-            transfers, animated over time.
-          </p>
-          <p className="mt-1 text-[11px]">
-            That's where we can do the really fun stuff — Sankey flows, particle trails,
-            per-asset "cascades" — but the data plumbing will already be in place.
-          </p>
-        </section>
       </div>
     </main>
   );
+}
+
+// Helper functions
+function parseTimestamp(value: any): number | null {
+  if (typeof value === "number") {
+    return value < 1e12 ? value * 1000 : value;
+  }
+  if (typeof value === "string") {
+    const num = Number(value);
+    if (!isNaN(num) && num > 0) {
+      return num < 1e12 ? num * 1000 : num;
+    }
+    const date = new Date(value);
+    if (!isNaN(date.getTime())) {
+      return date.getTime();
+    }
+  }
+  return null;
+}
+
+function getNumericValue(row: RawRow, keys: string[]): number | null {
+  for (const key of keys) {
+    if (key in row && row[key] != null) {
+      const val = typeof row[key] === "number" ? row[key] : Number(row[key]);
+      if (!isNaN(val) && isFinite(val)) {
+        return val;
+      }
+    }
+  }
+  return null;
+}
+
+function getStringValue(row: RawRow, keys: string[]): string | null {
+  for (const key of keys) {
+    if (key in row && row[key] != null) {
+      return String(row[key]);
+    }
+  }
+  return null;
+}
+
+function determineSide(row: RawRow): "long" | "short" {
+  const sideStr = getStringValue(row, ["side", "direction"])?.toLowerCase() || "";
+  if (sideStr.includes("long") || sideStr.includes("buy") || sideStr === "b") {
+    return "long";
+  }
+  if (sideStr.includes("short") || sideStr.includes("sell") || sideStr === "a") {
+    return "short";
+  }
+  return "long";
 }

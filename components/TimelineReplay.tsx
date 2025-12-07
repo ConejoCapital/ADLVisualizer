@@ -1,66 +1,144 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import type { TimelineEvent } from "../types/events";
+import React, { useEffect, useMemo, useState, useRef } from "react";
+import type { AdlEvent } from "../types/events";
 
 interface TimelineReplayProps {
-  events: TimelineEvent[];
+  events: AdlEvent[];
+  onTimeUpdate?: (timeMs: number) => void;
+  timeRange: { start: number; end: number };
 }
 
-export const TimelineReplay: React.FC<TimelineReplayProps> = ({ events }) => {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [index, setIndex] = useState(0);
-  const [speed, setSpeed] = useState(5); // events per second
+const EVENT_WINDOW_MS = 12 * 60 * 1000; // 12 minutes in ms
+const DEFAULT_PLAYBACK_DURATION_MS = 40 * 1000; // 40 seconds for full replay
+const SPEED_OPTIONS = [0.5, 1, 2, 4, 8];
 
-  const sorted = useMemo(
+export const TimelineReplay: React.FC<TimelineReplayProps> = ({ events, onTimeUpdate, timeRange: propTimeRange }) => {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [speed, setSpeed] = useState(1);
+  const animationFrameRef = useRef<number | null>(null);
+  const lastFrameTimeRef = useRef<number | null>(null);
+
+  // Pre-sort events by timestamp once
+  const sortedEvents = useMemo(
     () => [...events].sort((a, b) => a.timestamp - b.timestamp),
     [events]
   );
 
-  const current = sorted[index] ?? sorted[sorted.length - 1];
+  const timeRange = useMemo(() => {
+    if (propTimeRange.start && propTimeRange.end) {
+      return propTimeRange;
+    }
+    if (sortedEvents.length === 0) return { start: 0, end: 0 };
+    return {
+      start: sortedEvents[0].timestamp,
+      end: sortedEvents[sortedEvents.length - 1].timestamp,
+    };
+  }, [sortedEvents, propTimeRange]);
 
+  // Calculate virtual time step per real frame
+  const virtualTimeStepPerMs = useMemo(() => {
+    const actualDuration = timeRange.end - timeRange.start;
+    return actualDuration / DEFAULT_PLAYBACK_DURATION_MS; // virtual ms per real ms at 1x
+  }, [timeRange]);
+
+  // Get visible events at current virtual time
+  const visibleEvents = useMemo(() => {
+    const currentVirtualTime = timeRange.start + currentTimeMs;
+    return sortedEvents.filter((e) => e.timestamp <= currentVirtualTime);
+  }, [sortedEvents, currentTimeMs, timeRange.start]);
+
+  const currentEvent = visibleEvents[visibleEvents.length - 1];
+
+  // Animation loop
   useEffect(() => {
-    if (!isPlaying || sorted.length === 0) return;
-    if (index >= sorted.length - 1) {
-      setIsPlaying(false);
+    if (!isPlaying) {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      lastFrameTimeRef.current = null;
       return;
     }
 
-    const intervalMs = 1000 / speed;
-    const id = window.setInterval(() => {
-      setIndex((prev) => Math.min(prev + 1, sorted.length - 1));
-    }, intervalMs);
+    const animate = (currentRealTime: number) => {
+      if (lastFrameTimeRef.current === null) {
+        lastFrameTimeRef.current = currentRealTime;
+        animationFrameRef.current = requestAnimationFrame(animate);
+        return;
+      }
 
-    return () => window.clearInterval(id);
-  }, [isPlaying, index, sorted, speed]);
+      const deltaRealMs = currentRealTime - lastFrameTimeRef.current;
+      const deltaVirtualMs = deltaRealMs * virtualTimeStepPerMs * speed;
+      
+      setCurrentTimeMs((prev) => {
+        const newTime = prev + deltaVirtualMs;
+        const maxTime = timeRange.end - timeRange.start;
+        if (newTime >= maxTime) {
+          setIsPlaying(false);
+          const finalTime = maxTime;
+          onTimeUpdate?.(finalTime);
+          return finalTime;
+        }
+        onTimeUpdate?.(newTime);
+        return newTime;
+      });
 
+      lastFrameTimeRef.current = currentRealTime;
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    animationFrameRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [isPlaying, speed, virtualTimeStepPerMs, timeRange]);
+
+  // Reset when events change
   useEffect(() => {
-    // reset when new data comes in
-    setIndex(0);
+    setCurrentTimeMs(0);
     setIsPlaying(false);
   }, [events]);
 
-  if (!sorted.length) {
+  if (!sortedEvents.length) {
     return (
       <div className="border border-slate-700/70 rounded-2xl p-6 bg-slate-900/60 text-sm text-slate-400">
-        Upload a CSV and configure columns to see the timeline replay.
+        No events to display.
       </div>
     );
   }
 
-  const tMin = sorted[0].timestamp;
-  const tMax = sorted[sorted.length - 1].timestamp;
-  const spanMs = Math.max(1, tMax - tMin);
+  const currentVirtualTime = timeRange.start + currentTimeMs;
+  const progress = currentTimeMs / (timeRange.end - timeRange.start);
 
+  // Cumulative notional
   const cumulativeNotional = useMemo(() => {
     let acc = 0;
-    return sorted.map((ev) => {
+    return visibleEvents.map((ev) => {
       acc += Math.abs(ev.notionalUsd);
       return acc;
     });
-  }, [sorted]);
+  }, [visibleEvents]);
 
-  const currentCumulative = cumulativeNotional[index];
+  const currentCumulative = cumulativeNotional[cumulativeNotional.length - 1] || 0;
+
+  // Format time display
+  const formatTime = (ms: number) => {
+    const date = new Date(ms);
+    return date.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  };
+
+  const formatDuration = (ms: number) => {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${minutes}:${secs.toString().padStart(2, "0")}`;
+  };
 
   return (
     <div className="border border-slate-700/70 rounded-2xl p-4 sm:p-6 bg-slate-900/60 space-y-4">
@@ -68,8 +146,7 @@ export const TimelineReplay: React.FC<TimelineReplayProps> = ({ events }) => {
         <div>
           <h2 className="text-lg font-semibold">ADL / Liquidation Timeline Replay</h2>
           <p className="text-sm text-slate-400">
-            Replays the event chronologically. Think of it as a "reconstruction reel" of each
-            forced unwind.
+            Replays the 12-minute cascade compressed to ~40 seconds. Scrub to any point in time.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -78,161 +155,179 @@ export const TimelineReplay: React.FC<TimelineReplayProps> = ({ events }) => {
             className="px-4 py-2 rounded-xl text-sm font-medium bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition"
             onClick={() => setIsPlaying((p) => !p)}
           >
-            {isPlaying ? "Pause" : index >= sorted.length - 1 ? "Replay" : "Play"}
+            {isPlaying ? "Pause" : currentTimeMs >= timeRange.end - timeRange.start ? "Replay" : "Play"}
           </button>
           <button
             type="button"
             className="px-3 py-2 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
-            onClick={() => setIndex(0)}
+            onClick={() => {
+              setCurrentTimeMs(0);
+              setIsPlaying(false);
+            }}
           >
             Reset
           </button>
         </div>
       </div>
 
-      {/* Slider */}
+      {/* Timeline scrubber */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-slate-400">
           <span>
             Event{" "}
             <span className="font-mono text-emerald-400">
-              {index + 1} / {sorted.length}
+              {visibleEvents.length} / {sortedEvents.length}
             </span>
           </span>
           <span className="font-mono">
-            {new Date(current.timestamp).toISOString().replace("T", " ").slice(0, 19)} UTC
+            {formatTime(currentVirtualTime)}
           </span>
         </div>
         <input
           type="range"
           min={0}
-          max={sorted.length - 1}
-          value={index}
-          onChange={(e) => setIndex(Number(e.target.value))}
+          max={timeRange.end - timeRange.start}
+          value={currentTimeMs}
+          onChange={(e) => {
+            const newTime = Number(e.target.value);
+            setCurrentTimeMs(newTime);
+            setIsPlaying(false);
+            onTimeUpdate?.(newTime);
+          }}
           className="w-full"
         />
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <span>{formatTime(timeRange.start)}</span>
+          <span>{formatDuration(currentTimeMs)} / {formatDuration(timeRange.end - timeRange.start)}</span>
+          <span>{formatTime(timeRange.end)}</span>
+        </div>
       </div>
 
-      {/* Playback speed */}
+      {/* Speed control */}
       <div className="flex items-center gap-3 text-xs text-slate-400">
-        <span>Speed</span>
-        <input
-          type="range"
-          min={1}
-          max={60}
-          value={speed}
-          onChange={(e) => setSpeed(Number(e.target.value))}
-          className="flex-1"
-        />
-        <span className="font-mono">{speed} ev/s</span>
+        <span>Speed:</span>
+        <div className="flex gap-1">
+          {SPEED_OPTIONS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`px-2 py-1 rounded text-xs transition ${
+                speed === s
+                  ? "bg-emerald-500 text-slate-950 font-semibold"
+                  : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+              }`}
+              onClick={() => setSpeed(s)}
+            >
+              {s}x
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* SVG "sparkline" + bubbles */}
+      {/* SVG visualization */}
       <div className="mt-2">
         <TimelineSvg
-          events={sorted}
-          index={index}
+          events={sortedEvents}
+          visibleCount={visibleEvents.length}
           cumulative={cumulativeNotional}
-          tMin={tMin}
-          tMax={tMax}
+          currentTime={currentVirtualTime}
+          timeRange={timeRange}
         />
       </div>
 
-      {/* Current event details */}
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-        <StatCard
-          label="Current asset"
-          value={current.asset || "—"}
-          hint="Ticker / perps market for this ADL or liquidation."
-        />
-        <StatCard
-          label="Current notional"
-          value={`$${Math.abs(current.notionalUsd).toLocaleString(undefined, {
-            maximumFractionDigits: 0,
-          })}`}
-          hint="Absolute notional of the current event."
-        />
-        <StatCard
-          label="Cumulative notional"
-          value={`$${currentCumulative.toLocaleString(undefined, {
-            maximumFractionDigits: 0,
-          })}`}
-          hint="Total notional processed up to this point."
-        />
-      </div>
-
-      <p className="text-[11px] text-slate-500">
-        Tip: once this feels good, we can reuse the same parsed events to build a flow map:
-        accounts / assets as nodes, ADL transfers as edges.
-      </p>
+      {/* Current event stats */}
+      {currentEvent && (
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+          <StatCard
+            label="Current asset"
+            value={currentEvent.asset || "—"}
+            hint="Asset being ADL'd"
+          />
+          <StatCard
+            label="Current notional"
+            value={`$${Math.abs(currentEvent.notionalUsd).toLocaleString(undefined, {
+              maximumFractionDigits: 0,
+            })}`}
+            hint="Notional of current event"
+          />
+          <StatCard
+            label="Cumulative notional"
+            value={`$${currentCumulative.toLocaleString(undefined, {
+              maximumFractionDigits: 0,
+            })}`}
+            hint="Total notional processed"
+          />
+        </div>
+      )}
     </div>
   );
 };
 
 interface TimelineSvgProps {
-  events: TimelineEvent[];
-  index: number;
+  events: AdlEvent[];
+  visibleCount: number;
   cumulative: number[];
-  tMin: number;
-  tMax: number;
+  currentTime: number;
+  timeRange: { start: number; end: number };
 }
 
 const TimelineSvg: React.FC<TimelineSvgProps> = ({
   events,
-  index,
+  visibleCount,
   cumulative,
-  tMin,
-  tMax,
+  currentTime,
+  timeRange,
 }) => {
   const width = 1000;
   const height = 260;
   const padding = 40;
-  const spanMs = Math.max(1, tMax - tMin);
+  const spanMs = Math.max(1, timeRange.end - timeRange.start);
   const maxCum = cumulative[cumulative.length - 1] || 1;
 
   const xScale = (t: number) =>
-    padding + ((t - tMin) / spanMs) * (width - 2 * padding);
+    padding + ((t - timeRange.start) / spanMs) * (width - 2 * padding);
   const yScale = (val: number) =>
     height - padding - (val / maxCum) * (height - 2 * padding);
 
-  const currentX = xScale(events[index].timestamp);
+  const currentX = xScale(currentTime);
 
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
       className="w-full h-64 rounded-2xl bg-slate-950 border border-slate-800"
     >
-      {/* cumulative line */}
+      {/* Cumulative line */}
       <polyline
         fill="none"
         stroke="currentColor"
         strokeOpacity={0.4}
         strokeWidth={1.2}
         points={events
+          .slice(0, visibleCount)
           .map((ev, i) => `${xScale(ev.timestamp)},${yScale(cumulative[i])}`)
           .join(" ")}
       />
 
-      {/* past events as faint bubbles */}
-      {events.slice(0, index + 1).map((ev, i) => {
+      {/* Events as bubbles */}
+      {events.slice(0, visibleCount).map((ev, i) => {
         const x = xScale(ev.timestamp);
         const y = yScale(cumulative[i]);
-        const r = 2 + Math.min(10, Math.sqrt(Math.abs(ev.notionalUsd)) / 3_000);
-        const isCurrent = i === index;
+        const r = 2 + Math.min(8, Math.sqrt(Math.abs(ev.notionalUsd)) / 5_000);
+        const isCurrent = i === visibleCount - 1;
 
         return (
           <circle
-            key={ev.id}
+            key={`${ev.timestamp}-${i}`}
             cx={x}
             cy={y}
-            r={isCurrent ? r * 1.3 : r}
+            r={isCurrent ? r * 1.5 : r}
             fill="currentColor"
             opacity={isCurrent ? 0.9 : 0.25}
           />
         );
       })}
 
-      {/* vertical cursor */}
+      {/* Vertical cursor */}
       <line
         x1={currentX}
         y1={padding / 2}
@@ -244,7 +339,7 @@ const TimelineSvg: React.FC<TimelineSvgProps> = ({
         opacity={0.7}
       />
 
-      {/* axes labels (minimal) */}
+      {/* Labels */}
       <text
         x={padding}
         y={padding - 10}

@@ -84,7 +84,7 @@ export const ColumnConfigurator: React.FC<ColumnConfiguratorProps> = ({
           notionalUsd: notional,
           asset,
           side,
-        } satisfies TimelineEvent;
+        } as TimelineEvent;
       })
       .filter((x): x is TimelineEvent => x !== null)
       .sort((a, b) => a.timestamp - b.timestamp);

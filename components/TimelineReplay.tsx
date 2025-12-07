@@ -51,7 +51,7 @@ export const TimelineReplay: React.FC<TimelineReplayProps> = ({ events, onTimeUp
 
   const currentEvent = visibleEvents[visibleEvents.length - 1];
 
-  // Animation loop
+  // Animation loop - fixed to prevent freezing
   useEffect(() => {
     if (!isPlaying) {
       if (animationFrameRef.current) {
@@ -62,42 +62,62 @@ export const TimelineReplay: React.FC<TimelineReplayProps> = ({ events, onTimeUp
       return;
     }
 
+    let isActive = true;
+
     const animate = (currentRealTime: number) => {
-      if (lastFrameTimeRef.current === null) {
-        lastFrameTimeRef.current = currentRealTime;
-        animationFrameRef.current = requestAnimationFrame(animate);
+      if (!isActive || !isPlaying) {
         return;
       }
 
-      const deltaRealMs = currentRealTime - lastFrameTimeRef.current;
-      const deltaVirtualMs = deltaRealMs * virtualTimeStepPerMs * speed;
-      
-      setCurrentTimeMs((prev) => {
-        const newTime = prev + deltaVirtualMs;
-        const maxTime = timeRange.end - timeRange.start;
-        if (newTime >= maxTime) {
-          setIsPlaying(false);
-          const finalTime = maxTime;
-          onTimeUpdate?.(finalTime);
-          return finalTime;
+      try {
+        if (lastFrameTimeRef.current === null) {
+          lastFrameTimeRef.current = currentRealTime;
+          if (isActive && isPlaying) {
+            animationFrameRef.current = requestAnimationFrame(animate);
+          }
+          return;
         }
-        onTimeUpdate?.(newTime);
-        return newTime;
-      });
 
-      lastFrameTimeRef.current = currentRealTime;
-      animationFrameRef.current = requestAnimationFrame(animate);
+        const deltaRealMs = Math.min(currentRealTime - lastFrameTimeRef.current, 100); // Cap delta to prevent large jumps
+        const deltaVirtualMs = deltaRealMs * virtualTimeStepPerMs * speed;
+        
+        const maxTime = timeRange.end - timeRange.start;
+        
+        setCurrentTimeMs((prev) => {
+          const newTime = Math.min(prev + deltaVirtualMs, maxTime);
+          
+          if (newTime >= maxTime) {
+            setIsPlaying(false);
+            onTimeUpdate?.(maxTime);
+            return maxTime;
+          }
+          
+          onTimeUpdate?.(newTime);
+          return newTime;
+        });
+
+        lastFrameTimeRef.current = currentRealTime;
+        
+        if (isActive && isPlaying) {
+          animationFrameRef.current = requestAnimationFrame(animate);
+        }
+      } catch (error) {
+        console.error("Animation error:", error);
+        setIsPlaying(false);
+      }
     };
 
     animationFrameRef.current = requestAnimationFrame(animate);
 
     return () => {
+      isActive = false;
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
       }
+      lastFrameTimeRef.current = null;
     };
-  }, [isPlaying, speed, virtualTimeStepPerMs, timeRange]);
+  }, [isPlaying, speed, virtualTimeStepPerMs, timeRange, onTimeUpdate]);
 
   // Reset when events change
   useEffect(() => {

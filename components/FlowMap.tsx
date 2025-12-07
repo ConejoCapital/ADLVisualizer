@@ -34,7 +34,6 @@ interface SankeyLink {
 
 export const FlowMap: React.FC<FlowMapProps> = ({ events, currentTimeMs, timeRange }) => {
   const [viewMode, setViewMode] = useState<ViewMode>("sankey");
-  const [groupBy, setGroupBy] = useState<"asset" | "account">("asset");
   const [topN, setTopN] = useState(20);
   const [minNotional, setMinNotional] = useState(0);
   const [hoveredLink, setHoveredLink] = useState<string | null>(null);
@@ -48,10 +47,10 @@ export const FlowMap: React.FC<FlowMapProps> = ({ events, currentTimeMs, timeRan
     return events.filter((e) => e.timestamp <= currentVirtualTime);
   }, [events, currentTimeMs, timeRange.start]);
 
-  // Build Sankey diagram data
+  // Build Sankey diagram data - only account mode
   const sankeyData = useMemo(() => {
-    return buildSankeyData(visibleEvents, groupBy, topN, minNotional);
-  }, [visibleEvents, groupBy, topN, minNotional]);
+    return buildSankeyData(visibleEvents, "account", topN, minNotional);
+  }, [visibleEvents, topN, minNotional]);
 
   // Animate particles along links
   useEffect(() => {
@@ -78,9 +77,7 @@ export const FlowMap: React.FC<FlowMapProps> = ({ events, currentTimeMs, timeRan
         <div>
           <h2 className="text-lg font-semibold">ADL Flow Visualization</h2>
           <p className="text-sm text-slate-400">
-            {groupBy === "asset"
-              ? "Top assets being ADL'd (size = total notional)"
-              : "Notional transfers from liquidated accounts (left) to ADL counterparties (right)"}
+            Notional transfers from liquidated accounts (left) to ADL counterparties (right)
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -100,17 +97,6 @@ export const FlowMap: React.FC<FlowMapProps> = ({ events, currentTimeMs, timeRan
 
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-4 text-sm">
-        <div className="flex items-center gap-2">
-          <label className="text-slate-400">Group by:</label>
-          <select
-            className="bg-slate-950 border border-slate-700/70 rounded-lg px-2 py-1 text-xs"
-            value={groupBy}
-            onChange={(e) => setGroupBy(e.target.value as "asset" | "account")}
-          >
-            <option value="asset">Asset</option>
-            <option value="account">Account</option>
-          </select>
-        </div>
         <div className="flex items-center gap-2">
           <label className="text-slate-400">Top N:</label>
           <input
@@ -198,21 +184,13 @@ function buildSankeyData(
   const linkMap = new Map<string, { notional: number; asset?: string }>();
 
   for (const event of events) {
-    let sourceKey: string;
-    let targetKey: string;
-
-    if (groupBy === "asset") {
-      // Group by asset: show which assets are being liquidated
-      // For asset mode, we show liquidated assets as sources
-      sourceKey = event.asset;
-      targetKey = event.asset; // ADL happens within same asset
-    } else {
-      // Group by account: liquidated user -> target user
-      sourceKey = event.liquidatedUserId || "unknown";
-      targetKey = event.targetUserId || "unknown";
-      
-      // Skip if same account (shouldn't happen but safety check)
-      if (sourceKey === targetKey) continue;
+    // Only account mode now
+    const sourceKey = event.liquidatedUserId || "unknown";
+    const targetKey = event.targetUserId || "unknown";
+    
+    // Skip if same account or missing data
+    if (sourceKey === targetKey || sourceKey === "unknown" || targetKey === "unknown") {
+      continue;
     }
 
     if (!sourceKey || !targetKey || sourceKey === "unknown" || targetKey === "unknown") {
@@ -272,6 +250,12 @@ function buildSankeyData(
   const targetX = width * 0.85;
   const padding = 40;
 
+  // Format account address helper
+  const formatAccount = (addr: string) => {
+    if (addr.length <= 10) return addr;
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
+
   const nodes: SankeyNode[] = [];
 
   // Source nodes (left side)
@@ -279,36 +263,38 @@ function buildSankeyData(
   for (let i = 0; i < topSources.length; i++) {
     const source = topSources[i];
     const nodeHeight = (source.notional / totalSource) * (height - 2 * padding);
+      
     nodes.push({
-      id: source.id,
-      label: source.id.length > 12 ? source.id.slice(0, 8) + "..." : source.id,
-      type: "source",
-      category: groupBy,
-      totalNotional: source.notional,
-      x: sourceX,
-      y: sourceY,
-      height: nodeHeight,
-    });
+        id: source.id,
+        label: formatAccount(source.id),
+        type: "source",
+        category: groupBy,
+        totalNotional: source.notional,
+        x: sourceX,
+        y: sourceY,
+        height: nodeHeight,
+      });
     sourceY += nodeHeight + 2;
   }
 
-  // Target nodes (right side)
-  let targetY = padding;
-  for (let i = 0; i < topTargets.length; i++) {
-    const target = topTargets[i];
-    const nodeHeight = (target.notional / totalTarget) * (height - 2 * padding);
-    nodes.push({
-      id: target.id,
-      label: target.id.length > 12 ? target.id.slice(0, 8) + "..." : target.id,
-      type: "target",
-      category: groupBy,
-      totalNotional: target.notional,
-      x: targetX,
-      y: targetY,
-      height: nodeHeight,
-    });
-    targetY += nodeHeight + 2;
-  }
+      // Target nodes (right side)
+      let targetY = padding;
+      for (let i = 0; i < topTargets.length; i++) {
+        const target = topTargets[i];
+        const nodeHeight = (target.notional / totalTarget) * (height - 2 * padding);
+        
+        nodes.push({
+          id: target.id,
+          label: formatAccount(target.id),
+          type: "target",
+          category: groupBy,
+          totalNotional: target.notional,
+          x: targetX,
+          y: targetY,
+          height: nodeHeight,
+        });
+        targetY += nodeHeight + 2;
+      }
 
   return { nodes, links };
 }
@@ -457,7 +443,7 @@ const SankeyDiagram: React.FC<SankeyDiagramProps> = ({
         className="text-xs fill-current font-semibold"
         fillOpacity={0.8}
       >
-        Liquidated {nodes[0]?.category === "asset" ? "Assets" : "Accounts"}
+        Liquidated Accounts
       </text>
       <text
         x={width * 0.85 + 60}

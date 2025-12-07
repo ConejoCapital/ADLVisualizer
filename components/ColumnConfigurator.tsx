@@ -30,12 +30,15 @@ export const ColumnConfigurator: React.FC<ColumnConfiguratorProps> = ({
   headers,
   onEventsReady,
 }) => {
+  // Auto-configure for known canonical dataset schema
   const [selection, setSelection] = useState<ColumnSelection>(() => {
+    // Known columns from adl_detailed_analysis_REALTIME.csv:
+    // time, adl_notional, coin, side (or direction)
     return {
       timeCol: guessColumn(headers, ["time", "timestamp", "ts"]) || headers[0],
       notionalCol:
-        guessColumn(headers, ["notional", "usd", "value"]) || headers[1] || headers[0],
-      assetCol: guessColumn(headers, ["asset", "ticker", "coin", "symbol"]),
+        guessColumn(headers, ["adl_notional", "notional", "usd", "value"]) || headers[1] || headers[0],
+      assetCol: guessColumn(headers, ["coin", "asset", "ticker", "symbol"]),
       sideCol: guessColumn(headers, ["side", "direction", "long", "short"]),
     };
   });
@@ -96,10 +99,9 @@ export const ColumnConfigurator: React.FC<ColumnConfiguratorProps> = ({
 
   return (
     <div className="border border-slate-700/70 rounded-2xl p-4 bg-slate-900/60 space-y-4">
-      <h2 className="text-lg font-semibold">Map CSV columns</h2>
+      <h2 className="text-lg font-semibold">Column Configuration</h2>
       <p className="text-sm text-slate-400">
-        Choose which columns represent time, notional (USD), and asset. The viewer will then
-        construct a chronological ADL / liquidation timeline.
+        Columns are auto-detected from the canonical dataset. Adjust if needed to customize the timeline view.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <ConfigSelect

@@ -61,7 +61,6 @@ export const TimelineReplay: React.FC<TimelineReplayProps> = ({ events }) => {
   }, [sorted]);
 
   const currentCumulative = cumulativeNotional[index];
-  const maxCumulative = cumulativeNotional[cumulativeNotional.length - 1];
 
   return (
     <div className="border border-slate-700/70 rounded-2xl p-4 sm:p-6 bg-slate-900/60 space-y-4">
@@ -282,4 +281,3 @@ const StatCard: React.FC<StatCardProps> = ({ label, value, hint }) => (
     {hint && <div className="mt-1 text-[11px] text-slate-500">{hint}</div>}
   </div>
 );
-

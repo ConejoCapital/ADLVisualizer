@@ -7,4 +7,3 @@ export interface TimelineEvent {
   asset?: string;
   side?: "LONG" | "SHORT" | "UNKNOWN";
 }
-

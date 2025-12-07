@@ -59,4 +59,3 @@ export const CsvUploader: React.FC<CsvUploaderProps> = ({ onData }) => {
     </div>
   );
 };
-

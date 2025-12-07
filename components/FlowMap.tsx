@@ -77,7 +77,7 @@ export const FlowMap: React.FC<FlowMapProps> = ({ events, currentTimeMs, timeRan
         <div>
           <h2 className="text-lg font-semibold">ADL Flow Visualization</h2>
           <p className="text-sm text-slate-400">
-            Notional transfers from liquidated accounts (left) to ADL counterparties (right)
+            Account-to-account notional flows: Liquidated accounts (left, lost positions) → ADL counterparties (right, won positions)
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -147,9 +147,9 @@ export const FlowMap: React.FC<FlowMapProps> = ({ events, currentTimeMs, timeRan
         <StatCard label="Flows" value={sankeyData.links.length.toString()} />
       </div>
 
-      {/* Tooltip */}
+      {/* Tooltips */}
       {hoveredLink && (
-        <div className="absolute pointer-events-none z-50 bg-slate-800 border border-slate-700 rounded-lg p-3 text-xs shadow-xl">
+        <div className="absolute pointer-events-none z-50 bg-slate-800 border border-slate-700 rounded-lg p-3 text-xs shadow-xl max-w-xs">
           {(() => {
             const link = sankeyData.links.find((l) => l.id === hoveredLink);
             if (!link) return null;
@@ -157,13 +157,46 @@ export const FlowMap: React.FC<FlowMapProps> = ({ events, currentTimeMs, timeRan
             const target = sankeyData.nodes.find((n) => n.id === link.target);
             return (
               <>
+                <div className="font-semibold mb-2 text-emerald-400">
+                  Liquidated → ADL Counterparty
+                </div>
+                <div className="mb-1">
+                  <span className="text-slate-400">From:</span>{" "}
+                  <span className="font-mono text-[10px]">{link.source}</span>
+                </div>
+                <div className="mb-1">
+                  <span className="text-slate-400">To:</span>{" "}
+                  <span className="font-mono text-[10px]">{link.target}</span>
+                </div>
+                <div className="mt-2 pt-2 border-t border-slate-700">
+                  <div className="text-slate-300">
+                    Notional: <span className="font-semibold">${link.notional.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
+                  {link.asset && (
+                    <div className="text-slate-400 mt-1">
+                      Asset: <span className="font-semibold">{link.asset}</span>
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+      {hoveredNode && (
+        <div className="absolute pointer-events-none z-50 bg-slate-800 border border-slate-700 rounded-lg p-3 text-xs shadow-xl">
+          {(() => {
+            const node = sankeyData.nodes.find((n) => n.id === hoveredNode);
+            if (!node) return null;
+            return (
+              <>
                 <div className="font-semibold mb-1">
-                  {source?.label} → {target?.label}
+                  {node.type === "source" ? "Liquidated Account" : "ADL Counterparty"}
                 </div>
+                <div className="font-mono text-[10px] mb-2 text-slate-300">{node.id}</div>
                 <div className="text-slate-300">
-                  Notional: ${link.notional.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  Total: <span className="font-semibold">${(node.totalNotional / 1e6).toFixed(2)}M</span>
                 </div>
-                {link.asset && <div className="text-slate-400">Asset: {link.asset}</div>}
               </>
             );
           })()}
@@ -183,17 +216,25 @@ function buildSankeyData(
   const targetMap = new Map<string, number>();
   const linkMap = new Map<string, { notional: number; asset?: string }>();
 
+  // Helper to validate Ethereum address
+  const isValidAddress = (addr: string): boolean => {
+    if (!addr || typeof addr !== "string") return false;
+    // Must start with 0x and be 42 chars (0x + 40 hex chars)
+    return /^0x[a-fA-F0-9]{40}$/.test(addr);
+  };
+
   for (const event of events) {
-    // Only account mode now
-    const sourceKey = event.liquidatedUserId || "unknown";
-    const targetKey = event.targetUserId || "unknown";
+    // Only account mode - validate addresses
+    const sourceKey = event.liquidatedUserId?.trim() || "";
+    const targetKey = event.targetUserId?.trim() || "";
     
-    // Skip if same account or missing data
-    if (sourceKey === targetKey || sourceKey === "unknown" || targetKey === "unknown") {
+    // Skip if not valid Ethereum addresses (filters out asset names, empty strings, etc.)
+    if (!isValidAddress(sourceKey) || !isValidAddress(targetKey)) {
       continue;
     }
-
-    if (!sourceKey || !targetKey || sourceKey === "unknown" || targetKey === "unknown") {
+    
+    // Skip if same account
+    if (sourceKey.toLowerCase() === targetKey.toLowerCase()) {
       continue;
     }
 
@@ -250,8 +291,11 @@ function buildSankeyData(
   const targetX = width * 0.85;
   const padding = 40;
 
-  // Format account address helper
+  // Format account address helper - ensure it's a valid address
   const formatAccount = (addr: string) => {
+    if (!addr || !addr.startsWith("0x")) {
+      return "Invalid";
+    }
     if (addr.length <= 10) return addr;
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
   };
@@ -435,24 +479,42 @@ const SankeyDiagram: React.FC<SankeyDiagramProps> = ({
         );
       })}
 
-      {/* Labels */}
+      {/* Labels with clearer explanation */}
       <text
         x={width * 0.15 - 60}
-        y={20}
+        y={15}
         textAnchor="middle"
         className="text-xs fill-current font-semibold"
-        fillOpacity={0.8}
+        fillOpacity={0.9}
       >
         Liquidated Accounts
       </text>
       <text
+        x={width * 0.15 - 60}
+        y={28}
+        textAnchor="middle"
+        className="text-[9px] fill-current"
+        fillOpacity={0.6}
+      >
+        (Lost positions)
+      </text>
+      <text
         x={width * 0.85 + 60}
-        y={20}
+        y={15}
         textAnchor="middle"
         className="text-xs fill-current font-semibold"
-        fillOpacity={0.8}
+        fillOpacity={0.9}
       >
         ADL Counterparties
+      </text>
+      <text
+        x={width * 0.85 + 60}
+        y={28}
+        textAnchor="middle"
+        className="text-[9px] fill-current"
+        fillOpacity={0.6}
+      >
+        (Won positions)
       </text>
     </svg>
   );

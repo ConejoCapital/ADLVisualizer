@@ -34,4 +34,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# generated data files (should be committed for deployment)
+# public/data/*.json
+
 

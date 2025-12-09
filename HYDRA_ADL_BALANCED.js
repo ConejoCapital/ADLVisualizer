@@ -33,7 +33,8 @@ adlEvents = osc(30, 0.1, 1.5)
 
 // BALANCE EFFECT - Shows ADL responding to liquidations
 // Fluid modulation creates organic connection
-balance = src(o0)
+// Using gradient base instead of src(o0) to avoid grey screen
+balance = gradient()
   .modulate(
     osc(6, 0, 1.5)
       .modulate(noise(3).sub(gradient()), 1)
@@ -51,7 +52,7 @@ divider = shape(3, 0.01)
   .scale(0.01, 1)
   .color(1, 1, 1)
   .modulate(noise(10, 0.2), 0.1)
-  .brightness(0.3)
+  .brightness(0.5)
 
 // Final composition - clear split showing balance
 liquidations

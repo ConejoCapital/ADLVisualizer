@@ -2,8 +2,9 @@
 
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import * as d3 from "d3";
+import { StreamGraph } from "./StreamGraph";
 
-interface FlowData {
+export interface FlowData {
   metadata: {
     eventCount: number;
     timeRange: { start: number; end: number; durationMinutes: number };
@@ -22,12 +23,22 @@ interface FlowData {
     totalNotional: number;
     eventCount: number;
   }>;
+  assetLiquidationStats?: Array<{
+    asset: string;
+    liquidatedNotional: number;
+    adldNotional: number;
+    totalNotional: number;
+  }>;
   timeBuckets: Array<{
     time: number;
     timeISO: string;
     cumulativeNotional: number;
+    cumulativeLiquidated?: number;
+    cumulativeAdld?: number;
     notionalInBucket: number;
     eventCount: number;
+    liquidatedByAsset?: Record<string, number>;
+    adldByAsset?: Record<string, number>;
     assetFlows: Array<{ source: string; target: string; notional: number }>;
   }>;
 }
@@ -341,13 +352,20 @@ export const FlowVisualization: React.FC<FlowVisualizationProps> = ({
         </div>
       )}
 
-      {/* Placeholder for other views */}
-      {selectedView !== "chord" && (
+      {/* Stream Graph - Cascade Visualization */}
+      {selectedView === "stream" && (
+        <StreamGraph
+          data={data}
+          currentTimeMs={currentTimeMs}
+          animationProgress={animationProgress}
+        />
+      )}
+
+      {/* Placeholder for network view */}
+      {selectedView === "network" && (
         <div className="bg-slate-900/60 rounded-2xl p-12 text-center border border-slate-700/70">
-          <div className="text-4xl mb-4">{selectedView === "stream" ? "📈" : "🕸️"}</div>
-          <div className="text-slate-400">
-            {selectedView === "stream" ? "Stream graph coming soon" : "Network graph coming soon"}
-          </div>
+          <div className="text-4xl mb-4">🕸️</div>
+          <div className="text-slate-400">Network graph coming soon</div>
         </div>
       )}
     </div>

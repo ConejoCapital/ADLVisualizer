@@ -1,31 +1,47 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ColumnConfigurator } from "../components/ColumnConfigurator";
 import { TimelineReplay } from "../components/TimelineReplay";
-import { FlowMap } from "../components/FlowMap";
+import { FlowVisualization } from "../components/FlowVisualization";
 import type { AdlEvent, AdlEventsData, RawRow } from "../types/events";
 import Papa from "papaparse";
 
 const CANONICAL_JSON_URL = "https://raw.githubusercontent.com/ConejoCapital/HyperMultiAssetedADL/main/data/canonical/cash-only%20balances%20ADL%20event%20orderbook%202025-10-10/adl_events.json";
+const FLOW_DATA_URL = "https://raw.githubusercontent.com/ConejoCapital/HyperMultiAssetedADL/main/data/canonical/cash-only%20balances%20ADL%20event%20orderbook%202025-10-10/adl_flow_data.json";
 const CANONICAL_CSV_URL = "https://raw.githubusercontent.com/ConejoCapital/HyperMultiAssetedADL/main/data/canonical/cash-only%20balances%20ADL%20event%20orderbook%202025-10-10/adl_detailed_analysis_REALTIME.csv";
 
-type ViewMode = "timeline" | "flow";
+type ViewMode = "flow" | "timeline";
 
 export default function HomePage() {
   const [adlEvents, setAdlEvents] = useState<AdlEvent[]>([]);
+  const [flowData, setFlowData] = useState<any>(null);
   const [metadata, setMetadata] = useState<AdlEventsData["metadata"] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("timeline");
+  const [viewMode, setViewMode] = useState<ViewMode>("flow");
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [timeRange, setTimeRange] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
 
   useEffect(() => {
-    // Try loading JSON first, fallback to CSV
+    // Load flow data first (for new visualization)
     setLoading(true);
     setError(null);
 
+    // Load flow data
+    fetch(FLOW_DATA_URL)
+      .then((res) => {
+        if (!res.ok) throw new Error("Flow data not found");
+        return res.json();
+      })
+      .then((data) => {
+        setFlowData(data);
+        setTimeRange(data.metadata.timeRange);
+      })
+      .catch((err) => {
+        console.warn("Flow data not available:", err);
+      });
+
+    // Also load events for timeline view
     fetch(CANONICAL_JSON_URL)
       .then((res) => {
         if (res.ok) {
@@ -152,6 +168,17 @@ export default function HomePage() {
               <button
                 type="button"
                 className={`px-4 py-2 rounded-xl text-sm font-medium transition ${
+                  viewMode === "flow"
+                    ? "bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                }`}
+                onClick={() => setViewMode("flow")}
+              >
+                Flow Visualization
+              </button>
+              <button
+                type="button"
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition ${
                   viewMode === "timeline"
                     ? "bg-emerald-500 text-slate-950"
                     : "bg-slate-800 hover:bg-slate-700 text-slate-300"
@@ -160,38 +187,28 @@ export default function HomePage() {
               >
                 Timeline Replay
               </button>
-              <button
-                type="button"
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition ${
-                  viewMode === "flow"
-                    ? "bg-emerald-500 text-slate-950"
-                    : "bg-slate-800 hover:bg-slate-700 text-slate-300"
-                }`}
-                onClick={() => setViewMode("flow")}
-              >
-                Flow Map
-              </button>
-              <div className="ml-auto text-xs text-slate-500">
-                {metadata.eventCount.toLocaleString()} events • ${metadata.totalNotionalUsd.toLocaleString(undefined, {
-                  maximumFractionDigits: 0,
-                })} total notional
-              </div>
+              {metadata && (
+                <div className="ml-auto text-xs text-slate-500">
+                  {metadata.eventCount.toLocaleString()} events • ${metadata.totalNotionalUsd.toLocaleString(undefined, {
+                    maximumFractionDigits: 0,
+                  })} total notional
+                </div>
+              )}
             </div>
 
-            {/* Timeline view */}
-            {viewMode === "timeline" && (
-              <TimelineReplay
-                events={adlEvents}
-                onTimeUpdate={setCurrentTimeMs}
-                timeRange={timeRange}
+            {/* Flow visualization (new, colorful) */}
+            {viewMode === "flow" && flowData && (
+              <FlowVisualization
+                data={flowData}
+                currentTimeMs={currentTimeMs}
               />
             )}
 
-            {/* Flow map view */}
-            {viewMode === "flow" && (
-              <FlowMap
+            {/* Timeline view */}
+            {viewMode === "timeline" && adlEvents.length > 0 && (
+              <TimelineReplay
                 events={adlEvents}
-                currentTimeMs={currentTimeMs}
+                onTimeUpdate={setCurrentTimeMs}
                 timeRange={timeRange}
               />
             )}
